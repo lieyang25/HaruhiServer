@@ -1,5 +1,5 @@
 APP_NAME=haruhiserver
-CMD_DIR=./cmd/haruhi_server
+CMD_DIR=./cmd/haruhiserver
 
 .PHONY: run build tidy clean
 

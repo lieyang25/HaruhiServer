@@ -8,7 +8,9 @@ import (
 	"os"
 	"time"
 
+	"HaruhiServer/internal/apperr"
 	"HaruhiServer/internal/config"
+	"HaruhiServer/internal/response"
 )
 
 const appName = "haruhiserver"
@@ -73,12 +75,15 @@ func healthzHandler(logger *slog.Logger) http.HandlerFunc {
 		)
 
 		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			response.Error(w, apperr.New(
+				apperr.CodeMethodNotAllowed,
+				"method not allowed",
+			))
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		response.OK(w, map[string]any{
+			"status": "ok",
+		})
 	}
 }
