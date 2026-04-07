@@ -9,14 +9,21 @@ import (
 type Code string
 
 const (
+	// CodeOK marks successful responses.
 	CodeOK               Code = "OK"
+	// CodeInvalidArgument marks bad client input.
 	CodeInvalidArgument  Code = "INVALID_ARGUMENT"
+	// CodeNotFound marks missing resources.
 	CodeNotFound         Code = "NOT_FOUND"
+	// CodeMethodNotAllowed marks unsupported HTTP methods.
 	CodeMethodNotAllowed Code = "METHOD_NOT_ALLOWED"
+	// CodeConflict marks state conflicts (for example duplicates).
 	CodeConflict         Code = "CONFLICT"
+	// CodeInternal marks unexpected server-side failures.
 	CodeInternal         Code = "INTERNAL"
 )
 
+// Error is the project-level typed error used for API responses.
 type Error struct {
 	Code    Code
 	Message string
@@ -58,6 +65,7 @@ func Wrap(code Code, message string, err error) *Error {
 	}
 }
 
+// As extracts *Error from wrapped errors.
 func As(err error) *Error {
 	if err == nil {
 		return nil
@@ -71,6 +79,7 @@ func As(err error) *Error {
 	return nil
 }
 
+// HTTPStatus maps business error codes to transport status codes.
 func HTTPStatus(err error) int {
 	appErr := As(err)
 

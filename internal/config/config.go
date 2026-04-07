@@ -8,10 +8,13 @@ import (
 )
 
 type Config struct {
+	// HTTPAddr is the listening address, for example ":8080".
 	HTTPAddr string
+	// LogLevel controls the minimum level written by slog.
 	LogLevel slog.Level
 }
 
+// Default returns baseline config used when env vars are absent.
 func Default() Config {
 	return Config{
 		HTTPAddr: ":8080",
@@ -19,6 +22,7 @@ func Default() Config {
 	}
 }
 
+// Load builds config from defaults and optional env overrides.
 func Load() (Config, error) {
 	cfg := Default()
 
@@ -38,6 +42,7 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// lookupEnv reads a non-empty, trimmed env value.
 func lookupEnv(key string) (string, bool) {
 	v, ok := os.LookupEnv(key)
 	if !ok {
@@ -53,6 +58,7 @@ func lookupEnv(key string) (string, bool) {
 	return v, true
 }
 
+// parseLogLevel maps env text into slog levels.
 func parseLogLevel(s string) (slog.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "debug":

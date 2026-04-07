@@ -15,7 +15,9 @@ import (
 
 const appName = "haruhiserver"
 
+// main wires config, logging, routes, and starts the HTTP server.
 func main() {
+	// Load runtime config from environment; stop early on invalid values.
 	cfg, err := config.Load()
 
 	if err != nil {
@@ -23,9 +25,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set process default logger so internal packages can use slog directly.
 	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
+	// Build server with routes and basic timeouts.
 	server := newHTTPServer(cfg.HTTPAddr, logger)
 
 	logger.Info(
@@ -35,6 +39,7 @@ func main() {
 		"log_level", cfg.LogLevel.String(),
 	)
 
+	// ErrServerClosed is expected when server is shut down intentionally.
 	err = server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", "error", err)
@@ -42,6 +47,7 @@ func main() {
 	}
 }
 
+// newLogger creates a text logger with the configured minimum level.
 func newLogger(level slog.Level) *slog.Logger {
 	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: level,
@@ -50,6 +56,7 @@ func newLogger(level slog.Level) *slog.Logger {
 	return slog.New(handler)
 }
 
+// newHTTPServer creates the HTTP server and mounts all routes.
 func newHTTPServer(addr string, logger *slog.Logger) *http.Server {
 	mux := http.NewServeMux()
 	registerRoutes(mux, logger)
@@ -61,10 +68,12 @@ func newHTTPServer(addr string, logger *slog.Logger) *http.Server {
 	}
 }
 
+// registerRoutes centralizes endpoint registration.
 func registerRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	mux.HandleFunc("/healthz", healthzHandler(logger))
 }
 
+// healthzHandler serves a basic liveness endpoint.
 func healthzHandler(logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger.Info(
@@ -74,6 +83,7 @@ func healthzHandler(logger *slog.Logger) http.HandlerFunc {
 			"remote_addr", r.RemoteAddr,
 		)
 
+		// Keep the endpoint contract strict: only GET is allowed.
 		if r.Method != http.MethodGet {
 			response.Error(w, apperr.New(
 				apperr.CodeMethodNotAllowed,
@@ -82,6 +92,7 @@ func healthzHandler(logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 
+		// Return unified JSON envelope for successful health checks.
 		response.OK(w, map[string]any{
 			"status": "ok",
 		})

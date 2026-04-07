@@ -8,11 +8,15 @@ import (
 )
 
 type Envelope struct {
+	// Code is the stable business result code.
 	Code    string `json:"code"`
+	// Message is a short human-readable description.
 	Message string `json:"message"`
+	// Data carries successful payload and is omitted on nil.
 	Data    any    `json:"data,omitempty"`
 }
 
+// OK writes a standard success envelope with HTTP 200.
 func OK(w http.ResponseWriter, data any) {
 	writeJSON(w, http.StatusOK, Envelope{
 		Code:    string(apperr.CodeOK),
@@ -21,6 +25,7 @@ func OK(w http.ResponseWriter, data any) {
 	})
 }
 
+// Error converts any error into a standard error envelope.
 func Error(w http.ResponseWriter, err error) {
 	appErr := apperr.As(err)
 	if appErr == nil {
@@ -33,6 +38,7 @@ func Error(w http.ResponseWriter, err error) {
 	})
 }
 
+// writeJSON marshals envelope and writes status/body consistently.
 func writeJSON(w http.ResponseWriter, status int, v Envelope) {
 	b, err := json.Marshal(v)
 
