@@ -8,9 +8,8 @@ import (
 	"os"
 	"time"
 
-	"HaruhiServer/internal/apperr"
 	"HaruhiServer/internal/config"
-	"HaruhiServer/internal/response"
+	transporthttp "HaruhiServer/internal/transport/http"
 )
 
 const appName = "haruhiserver"
@@ -58,43 +57,9 @@ func newLogger(level slog.Level) *slog.Logger {
 
 // newHTTPServer creates the HTTP server and mounts all routes.
 func newHTTPServer(addr string, logger *slog.Logger) *http.Server {
-	mux := http.NewServeMux()
-	registerRoutes(mux, logger)
-
 	return &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           transporthttp.NewHandler(logger),
 		ReadHeaderTimeout: 5 * time.Second,
-	}
-}
-
-// registerRoutes centralizes endpoint registration.
-func registerRoutes(mux *http.ServeMux, logger *slog.Logger) {
-	mux.HandleFunc("/healthz", healthzHandler(logger))
-}
-
-// healthzHandler serves a basic liveness endpoint.
-func healthzHandler(logger *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		logger.Info(
-			"http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"remote_addr", r.RemoteAddr,
-		)
-
-		// Keep the endpoint contract strict: only GET is allowed.
-		if r.Method != http.MethodGet {
-			response.Error(w, apperr.New(
-				apperr.CodeMethodNotAllowed,
-				"method not allowed",
-			))
-			return
-		}
-
-		// Return unified JSON envelope for successful health checks.
-		response.OK(w, map[string]any{
-			"status": "ok",
-		})
 	}
 }
