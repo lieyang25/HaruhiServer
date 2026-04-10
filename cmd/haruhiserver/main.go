@@ -13,9 +13,12 @@ import (
 )
 
 const appName = "haruhiserver"
+const appVersion = "dev"
 
 // main wires config, logging, routes, and starts the HTTP server.
 func main() {
+	startedAt := time.Now().UTC()
+
 	// Load runtime config from environment; stop early on invalid values.
 	cfg, err := config.Load()
 
@@ -29,7 +32,11 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Build server with routes and basic timeouts.
-	server := newHTTPServer(cfg.HTTPAddr, logger)
+	server := newHTTPServer(cfg.HTTPAddr, logger, transporthttp.SystemInfo{
+		Name:      appName,
+		Version:   appVersion,
+		StartedAt: startedAt,
+	})
 
 	logger.Info(
 		"server starting",
@@ -56,10 +63,10 @@ func newLogger(level slog.Level) *slog.Logger {
 }
 
 // newHTTPServer creates the HTTP server and mounts all routes.
-func newHTTPServer(addr string, logger *slog.Logger) *http.Server {
+func newHTTPServer(addr string, logger *slog.Logger, info transporthttp.SystemInfo) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           transporthttp.NewHandler(logger),
+		Handler:           transporthttp.NewHandlerWithSystemInfo(logger, info),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 }

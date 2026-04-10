@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	transporthttp "HaruhiServer/internal/transport/http"
 )
@@ -67,6 +68,19 @@ func decodeEnvelope(t *testing.T, body string) responseEnvelope {
 	return env
 }
 
+func decodeEnvelopeData(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", body, err)
+	}
+	data, _ := raw["data"].(map[string]any)
+	if data == nil {
+		t.Fatalf("data is missing in response: %q", body)
+	}
+	return data
+}
+
 func TestHealthzRoutes(t *testing.T) {
 	logger, _ := loggerWithCapture()
 	h := transporthttp.NewHandler(logger)
@@ -89,6 +103,79 @@ func TestHealthzRoutes(t *testing.T) {
 	}
 	if env := decodeEnvelope(t, postRec.Body.String()); env.Code != "METHOD_NOT_ALLOWED" {
 		t.Fatalf("POST /healthz code = %q, want METHOD_NOT_ALLOWED", env.Code)
+	}
+}
+
+func TestReadyzRoutes(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	h := transporthttp.NewHandler(logger)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /readyz status = %d, want %d", getRec.Code, http.StatusOK)
+	}
+	if env := decodeEnvelope(t, getRec.Body.String()); env.Code != "OK" {
+		t.Fatalf("GET /readyz code = %q, want OK", env.Code)
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, "/readyz", nil)
+	postRec := httptest.NewRecorder()
+	h.ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /readyz status = %d, want %d", postRec.Code, http.StatusMethodNotAllowed)
+	}
+	if env := decodeEnvelope(t, postRec.Body.String()); env.Code != "METHOD_NOT_ALLOWED" {
+		t.Fatalf("POST /readyz code = %q, want METHOD_NOT_ALLOWED", env.Code)
+	}
+}
+
+func TestSystemInfoRoute(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	startedAt := time.Unix(1710000000, 0).UTC()
+	h := transporthttp.NewHandlerWithSystemInfo(logger, transporthttp.SystemInfo{
+		Name:      "haruhiserver",
+		Version:   "v0.0.1",
+		StartedAt: startedAt,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/info", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/system/info status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	data := decodeEnvelopeData(t, rec.Body.String())
+	if got, _ := data["service"].(string); got != "haruhiserver" {
+		t.Fatalf("service = %q, want haruhiserver", got)
+	}
+	if got, _ := data["version"].(string); got != "v0.0.1" {
+		t.Fatalf("version = %q, want v0.0.1", got)
+	}
+	if got, _ := data["started_at"].(string); got != startedAt.Format(time.RFC3339) {
+		t.Fatalf("started_at = %q, want %q", got, startedAt.Format(time.RFC3339))
+	}
+	if got, ok := data["uptime_seconds"].(float64); !ok || got < 0 {
+		t.Fatalf("uptime_seconds = %#v, want non-negative number", data["uptime_seconds"])
+	}
+}
+
+func TestSystemInfoRoute_MethodNotAllowed(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	h := transporthttp.NewHandler(logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/info", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/v1/system/info status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if env := decodeEnvelope(t, rec.Body.String()); env.Code != "METHOD_NOT_ALLOWED" {
+		t.Fatalf("POST /api/v1/system/info code = %q, want METHOD_NOT_ALLOWED", env.Code)
 	}
 }
 
