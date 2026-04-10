@@ -58,7 +58,8 @@ func (s *noteService) Create(ctx context.Context, in CreateNoteInput) (*domain.N
 		domain.AuditActionCreate,
 		fmt.Sprintf("create note %s", note.Title),
 	); err != nil {
-		return nil, err
+		rollbackErr := s.deps.repos.Notes.Delete(ctx, note.ID)
+		return nil, joinAuditAndRollbackError(err, "rollback note create", rollbackErr)
 	}
 
 	return note, nil

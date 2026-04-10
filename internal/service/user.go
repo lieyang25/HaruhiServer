@@ -50,7 +50,8 @@ func (s *userService) Create(ctx context.Context, in CreateUserInput) (*domain.U
 		domain.AuditActionCreate,
 		fmt.Sprintf("create user %s", user.Username),
 	); err != nil {
-		return nil, err
+		rollbackErr := s.deps.repos.Users.Delete(ctx, user.ID)
+		return nil, joinAuditAndRollbackError(err, "rollback user create", rollbackErr)
 	}
 
 	return user, nil

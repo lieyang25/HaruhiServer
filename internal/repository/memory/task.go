@@ -57,6 +57,9 @@ func (r *TaskRepository) Update(ctx context.Context, task *domain.Task) error {
 	if _, ok := r.byID[task.ID]; !ok {
 		return domain.NewDomainError(domain.ErrNotFound, "task not found")
 	}
+	if r.byID[task.ID].Status == domain.TaskStatusDone && task.Status == domain.TaskStatusCanceled {
+		return domain.NewDomainError(domain.ErrInvalidState, "done task cannot transition to canceled")
+	}
 
 	r.byID[task.ID] = cloneTask(task)
 	return nil

@@ -68,6 +68,9 @@ func (r *SessionRepository) Update(ctx context.Context, session *domain.Session)
 	if !ok {
 		return domain.NewDomainError(domain.ErrNotFound, "session not found")
 	}
+	if old.Status == domain.SessionStatusRevoked && session.Status != domain.SessionStatusRevoked {
+		return domain.NewDomainError(domain.ErrInvalidState, "revoked session cannot transition to active")
+	}
 
 	oldKey := indexKey(old.TokenHash)
 	if oldKey != newKey {

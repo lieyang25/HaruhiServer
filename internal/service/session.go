@@ -50,7 +50,8 @@ func (s *sessionService) Create(ctx context.Context, in CreateSessionInput) (*do
 		domain.AuditActionLogin,
 		"create session",
 	); err != nil {
-		return nil, err
+		rollbackErr := s.deps.repos.Sessions.Delete(ctx, session.ID)
+		return nil, joinAuditAndRollbackError(err, "rollback session create", rollbackErr)
 	}
 
 	return session, nil
@@ -114,6 +115,12 @@ func (s *sessionService) Touch(ctx context.Context, in SessionTouchInput) (*doma
 		return nil, err
 	}
 	if err := s.deps.repos.Sessions.Update(ctx, session); err != nil {
+		if de := domain.AsDomainError(err); de != nil && de.Code == domain.ErrInvalidState {
+			latest, latestErr := s.deps.repos.Sessions.GetByID(ctx, in.SessionID)
+			if latestErr == nil && latest.Status == domain.SessionStatusRevoked {
+				return latest, nil
+			}
+		}
 		return nil, err
 	}
 

@@ -36,6 +36,21 @@ func RequestIDFromContext(ctx context.Context) string {
 	return v
 }
 
+func effectiveRequestID(r *http.Request, w http.ResponseWriter) string {
+	if rid := strings.TrimSpace(RequestIDFromContext(r.Context())); rid != "" {
+		return rid
+	}
+	if w != nil {
+		if rid := strings.TrimSpace(w.Header().Get(RequestIDHeader)); rid != "" {
+			return rid
+		}
+	}
+	if rid := strings.TrimSpace(r.Header.Get(RequestIDHeader)); rid != "" {
+		return rid
+	}
+	return ""
+}
+
 func RequestIDMiddleware() Middleware {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +82,7 @@ func LoggingMiddleware(logger *slog.Logger) Middleware {
 			h.ServeHTTP(sw, r)
 			logger.Info(
 				"http request",
-				"request_id", RequestIDFromContext(r.Context()),
+				"request_id", effectiveRequestID(r, sw),
 				"method", r.Method,
 				"path", r.URL.RequestURI(),
 				"status", sw.status,
@@ -89,7 +104,7 @@ func RecoverMiddleware(logger *slog.Logger) Middleware {
 				}
 				logger.Error(
 					"panic recovered",
-					"request_id", RequestIDFromContext(r.Context()),
+					"request_id", effectiveRequestID(r, w),
 					"panic", rec,
 					"stack", string(debug.Stack()),
 				)
@@ -140,11 +155,12 @@ type statusResponseWriter struct {
 }
 
 func (w *statusResponseWriter) WriteHeader(status int) {
-	if !w.wroteHeader {
-		w.status = status
-		w.wroteHeader = true
+	if w.wroteHeader {
+		return
 	}
 
+	w.status = status
+	w.wroteHeader = true
 	w.ResponseWriter.WriteHeader(status)
 }
 

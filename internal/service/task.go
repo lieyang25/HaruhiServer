@@ -65,7 +65,8 @@ func (s *taskService) Create(ctx context.Context, in CreateTaskInput) (*domain.T
 		domain.AuditActionCreate,
 		fmt.Sprintf("create task %s", task.Title),
 	); err != nil {
-		return nil, err
+		rollbackErr := s.deps.repos.Tasks.Delete(ctx, task.ID)
+		return nil, joinAuditAndRollbackError(err, "rollback task create", rollbackErr)
 	}
 
 	return task, nil
@@ -160,6 +161,12 @@ func (s *taskService) Cancel(ctx context.Context, in TaskActionInput) (*domain.T
 		return nil, err
 	}
 	if err := s.deps.repos.Tasks.Update(ctx, task); err != nil {
+		if de := domain.AsDomainError(err); de != nil && de.Code == domain.ErrInvalidState {
+			latest, latestErr := s.deps.repos.Tasks.GetByID(ctx, in.TaskID)
+			if latestErr == nil && latest.Status == domain.TaskStatusDone {
+				return latest, nil
+			}
+		}
 		return nil, err
 	}
 

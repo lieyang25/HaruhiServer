@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -100,4 +101,15 @@ func recordAudit(
 	}
 
 	return repos.AuditLogs.Create(ctx, log)
+}
+
+func joinAuditAndRollbackError(auditErr error, rollbackStep string, rollbackErr error) error {
+	if rollbackErr == nil {
+		return auditErr
+	}
+
+	return errors.Join(
+		auditErr,
+		fmt.Errorf("%s: %w", rollbackStep, rollbackErr),
+	)
 }

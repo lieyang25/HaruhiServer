@@ -19,9 +19,9 @@ func NewHandler(logger *slog.Logger) http.Handler {
 
 	return Chain(
 		mux,
-		CORSMiddleware(),
-		RecoverMiddleware(logger),
-		LoggingMiddleware(logger),
 		RequestIDMiddleware(),
+		LoggingMiddleware(logger),
+		RecoverMiddleware(logger),
+		CORSMiddleware(),
 	)
 }

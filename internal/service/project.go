@@ -54,7 +54,8 @@ func (s *projectService) Create(ctx context.Context, in CreateProjectInput) (*do
 		domain.AuditActionCreate,
 		fmt.Sprintf("create project %s", project.Name),
 	); err != nil {
-		return nil, err
+		rollbackErr := s.deps.repos.Projects.Delete(ctx, project.ID)
+		return nil, joinAuditAndRollbackError(err, "rollback project create", rollbackErr)
 	}
 
 	return project, nil
