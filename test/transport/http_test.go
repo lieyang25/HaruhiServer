@@ -1,0 +1,274 @@
+package transport_test
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+
+	transporthttp "HaruhiServer/internal/transport/http"
+)
+
+type capturedRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]any
+}
+
+type captureHandler struct {
+	mu      sync.Mutex
+	records []capturedRecord
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	attrs := make(map[string]any)
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	h.mu.Lock()
+	h.records = append(h.records, capturedRecord{level: r.Level, msg: r.Message, attrs: attrs})
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *captureHandler) snapshot() []capturedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]capturedRecord, len(h.records))
+	copy(out, h.records)
+	return out
+}
+
+func loggerWithCapture() (*slog.Logger, *captureHandler) {
+	cap := &captureHandler{}
+	return slog.New(cap), cap
+}
+
+type responseEnvelope struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func decodeEnvelope(t *testing.T, body string) responseEnvelope {
+	t.Helper()
+	var env responseEnvelope
+	if err := json.Unmarshal([]byte(body), &env); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", body, err)
+	}
+	return env
+}
+
+func TestHealthzRoutes(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	h := transporthttp.NewHandler(logger)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /healthz status = %d, want %d", getRec.Code, http.StatusOK)
+	}
+	if env := decodeEnvelope(t, getRec.Body.String()); env.Code != "OK" {
+		t.Fatalf("GET /healthz code = %q, want OK", env.Code)
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, "/healthz", nil)
+	postRec := httptest.NewRecorder()
+	h.ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /healthz status = %d, want %d", postRec.Code, http.StatusMethodNotAllowed)
+	}
+	if env := decodeEnvelope(t, postRec.Body.String()); env.Code != "METHOD_NOT_ALLOWED" {
+		t.Fatalf("POST /healthz code = %q, want METHOD_NOT_ALLOWED", env.Code)
+	}
+}
+
+func TestRequestIDMiddleware_UsesProvidedHeader(t *testing.T) {
+	h := transporthttp.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), transporthttp.RequestIDMiddleware())
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(transporthttp.RequestIDHeader, "req-123")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get(transporthttp.RequestIDHeader); got != "req-123" {
+		t.Fatalf("%s = %q, want req-123", transporthttp.RequestIDHeader, got)
+	}
+}
+
+func TestCORSMiddleware_OPTIONS(t *testing.T) {
+	h := transporthttp.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not run for OPTIONS")
+	}), transporthttp.CORSMiddleware())
+
+	req := httptest.NewRequest(http.MethodOptions, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("missing CORS header")
+	}
+}
+
+func TestChain_Order(t *testing.T) {
+	calls := make([]string, 0, 4)
+	mw1 := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "mw1-before")
+			next.ServeHTTP(w, r)
+			calls = append(calls, "mw1-after")
+		})
+	}
+	mw2 := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "mw2-before")
+			next.ServeHTTP(w, r)
+			calls = append(calls, "mw2-after")
+		})
+	}
+
+	h := transporthttp.Chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls = append(calls, "handler")
+	}), mw1, mw2)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	want := []string{"mw1-before", "mw2-before", "handler", "mw2-after", "mw1-after"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls len = %d, want %d; calls=%v", len(calls), len(want), calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("calls[%d] = %q, want %q; calls=%v", i, calls[i], want[i], calls)
+		}
+	}
+}
+
+func TestRecoverMiddleware(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	h := transporthttp.Chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}), transporthttp.RecoverMiddleware(logger))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if env := decodeEnvelope(t, rec.Body.String()); env.Code != "INTERNAL" {
+		t.Fatalf("code = %q, want INTERNAL", env.Code)
+	}
+}
+
+func TestRisk_RequestIDShouldBePresentInAccessLogs(t *testing.T) {
+	logger, cap := loggerWithCapture()
+	h := transporthttp.NewHandler(logger)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	for _, log := range cap.snapshot() {
+		if log.msg == "http request" {
+			rid, _ := log.attrs["request_id"].(string)
+			if rid == "" {
+				t.Fatalf("semantic risk: request_id should be non-empty in access log")
+			}
+			return
+		}
+	}
+	t.Fatal("no http request log captured")
+}
+
+func TestRisk_RequestIDShouldBePresentInPanicLogs(t *testing.T) {
+	logger, cap := loggerWithCapture()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/panic", func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+
+	h := transporthttp.Chain(
+		mux,
+		transporthttp.CORSMiddleware(),
+		transporthttp.RecoverMiddleware(logger),
+		transporthttp.LoggingMiddleware(logger),
+		transporthttp.RequestIDMiddleware(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	for _, log := range cap.snapshot() {
+		if log.msg == "panic recovered" {
+			rid, _ := log.attrs["request_id"].(string)
+			if rid == "" {
+				t.Fatalf("semantic risk: panic log should include non-empty request_id")
+			}
+			return
+		}
+	}
+	t.Fatal("no panic recovered log captured")
+}
+
+func TestRisk_OPTIONSShouldCarryRequestIDAndBeLogged(t *testing.T) {
+	logger, cap := loggerWithCapture()
+	h := transporthttp.NewHandler(logger)
+
+	req := httptest.NewRequest(http.MethodOptions, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Header().Get(transporthttp.RequestIDHeader) == "" {
+		t.Fatalf("semantic risk: OPTIONS response should include %s", transporthttp.RequestIDHeader)
+	}
+	for _, log := range cap.snapshot() {
+		if log.msg == "http request" {
+			return
+		}
+	}
+	t.Fatalf("semantic risk: OPTIONS should be observable in access logs")
+}
+
+type countingResponseWriter struct {
+	header http.Header
+	calls  int
+}
+
+func newCountingResponseWriter() *countingResponseWriter {
+	return &countingResponseWriter{header: make(http.Header)}
+}
+
+func (w *countingResponseWriter) Header() http.Header         { return w.header }
+func (w *countingResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *countingResponseWriter) WriteHeader(int)             { w.calls++ }
+
+func TestRisk_LoggingMiddlewareShouldNotForwardDuplicateWriteHeader(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	h := transporthttp.Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(http.StatusAccepted)
+	}), transporthttp.LoggingMiddleware(logger))
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	base := newCountingResponseWriter()
+	h.ServeHTTP(base, req)
+
+	if base.calls != 1 {
+		t.Fatalf("semantic risk: underlying WriteHeader called %d times, want 1", base.calls)
+	}
+}
