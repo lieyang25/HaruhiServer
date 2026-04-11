@@ -47,8 +47,19 @@ type ProjectService interface {
 	GetByID(ctx context.Context, id domain.ProjectID) (*domain.Project, error)
 	List(ctx context.Context) ([]*domain.Project, error)
 	ListByOwnerID(ctx context.Context, ownerID domain.UserID) ([]*domain.Project, error)
+	Update(ctx context.Context, in UpdateProjectInput) (*domain.Project, error)
+	Delete(ctx context.Context, in ProjectActionInput) error
 	Archive(ctx context.Context, in ProjectActionInput) (*domain.Project, error)
 	Reopen(ctx context.Context, in ProjectActionInput) (*domain.Project, error)
+}
+
+type UpdateProjectInput struct {
+	ProjectID   domain.ProjectID
+	Name        *string
+	Description *string
+	Visibility  *domain.ProjectVisibility
+	Archive     *bool
+	Meta        ActionMeta
 }
 
 type CreateTaskInput struct {

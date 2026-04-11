@@ -12,6 +12,8 @@ func (h *Handler) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", h.healthz)
 	mux.HandleFunc("/readyz", h.readyz)
 	mux.HandleFunc("/api/v1/system/info", h.systemInfoGet)
+	mux.HandleFunc("/api/v1/projects", h.projects)
+	mux.HandleFunc("/api/v1/projects/", h.projectByID)
 }
 
 func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {

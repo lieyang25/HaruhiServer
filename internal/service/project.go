@@ -73,6 +73,86 @@ func (s *projectService) ListByOwnerID(ctx context.Context, ownerID domain.UserI
 	return s.deps.repos.Projects.ListByOwnerID(ctx, ownerID)
 }
 
+func (s *projectService) Update(ctx context.Context, in UpdateProjectInput) (*domain.Project, error) {
+	project, err := s.deps.repos.Projects.GetByID(ctx, in.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+
+	now := s.deps.now()
+	if in.Name != nil {
+		project.Name = *in.Name
+	}
+	if in.Description != nil {
+		project.Description = *in.Description
+	}
+	if in.Visibility != nil {
+		project.Visibility = *in.Visibility
+	}
+	if in.Archive != nil {
+		if *in.Archive {
+			if err := project.Archive(now); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := project.Reopen(now); err != nil {
+				return nil, err
+			}
+		}
+	}
+	project.UpdatedAt = now
+
+	if err := project.Validate(); err != nil {
+		return nil, err
+	}
+	if err := s.deps.repos.Projects.Update(ctx, project); err != nil {
+		return nil, err
+	}
+
+	if err := recordAudit(
+		ctx,
+		s.deps.repos,
+		s.deps.idg,
+		now,
+		in.Meta,
+		domain.AuditResourceProject,
+		string(project.ID),
+		domain.AuditActionUpdate,
+		"update project",
+	); err != nil {
+		return nil, err
+	}
+
+	return project, nil
+}
+
+func (s *projectService) Delete(ctx context.Context, in ProjectActionInput) error {
+	if _, err := s.deps.repos.Projects.GetByID(ctx, in.ProjectID); err != nil {
+		return err
+	}
+
+	now := s.deps.now()
+	if err := s.deps.repos.Projects.Delete(ctx, in.ProjectID); err != nil {
+		return err
+	}
+
+	if err := recordAudit(
+		ctx,
+		s.deps.repos,
+		s.deps.idg,
+		now,
+		in.Meta,
+		domain.AuditResourceProject,
+		string(in.ProjectID),
+		domain.AuditActionDelete,
+		"delete project",
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *projectService) Archive(ctx context.Context, in ProjectActionInput) (*domain.Project, error) {
 	project, err := s.deps.repos.Projects.GetByID(ctx, in.ProjectID)
 	if err != nil {
