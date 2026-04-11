@@ -1,6 +1,7 @@
 package transport_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"HaruhiServer/internal/repository/memory"
+	"HaruhiServer/internal/service"
 	transporthttp "HaruhiServer/internal/transport/http"
 )
 
@@ -258,6 +261,63 @@ func TestRecoverMiddleware(t *testing.T) {
 	}
 	if env := decodeEnvelope(t, rec.Body.String()); env.Code != "INTERNAL" {
 		t.Fatalf("code = %q, want INTERNAL", env.Code)
+	}
+}
+
+func TestProjectCRUDRoutes(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	repos := memory.NewRepositories()
+	svcs, err := service.NewServices(repos, service.RandomIDGenerator{}, time.Now)
+	if err != nil {
+		t.Fatalf("NewServices err = %v", err)
+	}
+	owner, err := svcs.Users.Create(context.Background(), service.CreateUserInput{
+		Username:    "owner-http",
+		DisplayName: "Owner HTTP",
+		Email:       "owner-http@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create err = %v", err)
+	}
+
+	h := transporthttp.NewHandlerWithServices(logger, transporthttp.SystemInfo{}, svcs)
+
+	createBody := []byte(`{"owner_id":"` + string(owner.ID) + `","name":"p9","description":"demo","visibility":"private"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/projects", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	h.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/projects status = %d, want %d body=%s", createRec.Code, http.StatusOK, createRec.Body.String())
+	}
+	createData := decodeEnvelopeData(t, createRec.Body.String())
+	projectID, _ := createData["ID"].(string)
+	if projectID == "" {
+		t.Fatalf("POST /api/v1/projects missing ID: %s", createRec.Body.String())
+	}
+
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projectID, nil))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects/{id} status = %d, want %d", getRec.Code, http.StatusOK)
+	}
+
+	patchRec := httptest.NewRecorder()
+	patchBody := []byte(`{"name":"p9-updated","archived":true}`)
+	h.ServeHTTP(patchRec, httptest.NewRequest(http.MethodPatch, "/api/v1/projects/"+projectID, bytes.NewReader(patchBody)))
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/v1/projects/{id} status = %d, want %d body=%s", patchRec.Code, http.StatusOK, patchRec.Body.String())
+	}
+
+	listRec := httptest.NewRecorder()
+	h.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects status = %d, want %d", listRec.Code, http.StatusOK)
+	}
+
+	deleteRec := httptest.NewRecorder()
+	h.ServeHTTP(deleteRec, httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+projectID, nil))
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/v1/projects/{id} status = %d, want %d", deleteRec.Code, http.StatusOK)
 	}
 }
 

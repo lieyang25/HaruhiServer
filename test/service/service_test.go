@@ -222,6 +222,27 @@ func TestService_ProjectLifecycleAndQueries(t *testing.T) {
 	if _, err := svcs.Projects.Reopen(ctx, service.ProjectActionInput{ProjectID: p.ID}); err != nil {
 		t.Fatalf("Projects.Reopen err = %v", err)
 	}
+
+	newName := "Project Q2"
+	newVisibility := domain.ProjectVisibilityPublic
+	updated, err := svcs.Projects.Update(ctx, service.UpdateProjectInput{
+		ProjectID:  p.ID,
+		Name:       &newName,
+		Visibility: &newVisibility,
+	})
+	if err != nil {
+		t.Fatalf("Projects.Update err = %v", err)
+	}
+	if updated.Name != newName {
+		t.Fatalf("updated name = %q, want %q", updated.Name, newName)
+	}
+
+	if err := svcs.Projects.Delete(ctx, service.ProjectActionInput{ProjectID: p.ID}); err != nil {
+		t.Fatalf("Projects.Delete err = %v", err)
+	}
+	if _, err := svcs.Projects.GetByID(ctx, p.ID); err == nil {
+		t.Fatal("Projects.GetByID after delete err = nil")
+	}
 }
 
 func TestService_TaskLifecycleAndQueries(t *testing.T) {
