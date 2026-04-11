@@ -84,10 +84,24 @@ type TaskService interface {
 	List(ctx context.Context) ([]*domain.Task, error)
 	ListByProjectID(ctx context.Context, projectID domain.ProjectID) ([]*domain.Task, error)
 	ListByAssigneeID(ctx context.Context, assigneeID domain.UserID) ([]*domain.Task, error)
+	Update(ctx context.Context, in UpdateTaskInput) (*domain.Task, error)
+	Delete(ctx context.Context, in TaskActionInput) error
 	Start(ctx context.Context, in TaskActionInput) (*domain.Task, error)
 	MarkDone(ctx context.Context, in TaskActionInput) (*domain.Task, error)
 	Cancel(ctx context.Context, in TaskActionInput) (*domain.Task, error)
 	Reopen(ctx context.Context, in TaskActionInput) (*domain.Task, error)
+}
+
+type UpdateTaskInput struct {
+	TaskID        domain.TaskID
+	Title         *string
+	Description   *string
+	AssigneeID    *domain.UserID
+	ClearAssignee bool
+	Priority      *domain.TaskPriority
+	DueAt         *time.Time
+	ClearDueAt    bool
+	Meta          ActionMeta
 }
 
 type CreateNoteInput struct {

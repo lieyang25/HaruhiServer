@@ -21,12 +21,3 @@
 | P16 | 优雅关闭与清理       | 让项目更像真实服务           | `SIGINT/SIGTERM`、graceful shutdown、超时设置、资源清理                | 可正常停止的服务    | Ctrl+C 后能平稳退出                               |
 | P17 | 收尾与整理         | 形成一份合格骨架            | README、目录说明、配置示例、TODO 标注、代码整理                               | 可继续迭代的项目骨架  | 项目结构清晰，别人能读懂                                |
 
-## P9 Project 模块接口
-
-已实现 `/api/v1/projects` 的完整 CRUD：
-
-- `POST /api/v1/projects`：创建项目
-- `GET /api/v1/projects`：项目列表
-- `GET /api/v1/projects/{id}`：项目详情
-- `PATCH /api/v1/projects/{id}`：更新项目（支持 `name`、`description`、`visibility`、`archived`）
-- `DELETE /api/v1/projects/{id}`：删除项目

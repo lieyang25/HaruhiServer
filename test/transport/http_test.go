@@ -321,6 +321,193 @@ func TestProjectCRUDRoutes(t *testing.T) {
 	}
 }
 
+func TestProjectTaskRoutes_CRUDByProject(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	repos := memory.NewRepositories()
+	svcs, err := service.NewServices(repos, service.RandomIDGenerator{}, time.Now)
+	if err != nil {
+		t.Fatalf("NewServices err = %v", err)
+	}
+	owner, err := svcs.Users.Create(context.Background(), service.CreateUserInput{
+		Username:    "owner-task-http",
+		DisplayName: "Owner Task HTTP",
+		Email:       "owner-task-http@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create(owner) err = %v", err)
+	}
+	assignee, err := svcs.Users.Create(context.Background(), service.CreateUserInput{
+		Username:    "assignee-task-http",
+		DisplayName: "Assignee Task HTTP",
+		Email:       "assignee-task-http@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create(assignee) err = %v", err)
+	}
+	project, err := svcs.Projects.Create(context.Background(), service.CreateProjectInput{
+		OwnerID: owner.ID,
+		Name:    "p10-project",
+	})
+	if err != nil {
+		t.Fatalf("Projects.Create err = %v", err)
+	}
+
+	h := transporthttp.NewHandlerWithServices(logger, transporthttp.SystemInfo{}, svcs)
+
+	dueAt := time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)
+	createBody := []byte(`{"creator_id":"` + string(owner.ID) + `","assignee_id":"` + string(assignee.ID) + `","title":"p10-task","description":"demo","priority":"high","due_at":"` + dueAt + `"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+string(project.ID)+"/tasks", bytes.NewReader(createBody))
+	createRec := httptest.NewRecorder()
+	h.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/projects/{id}/tasks status = %d, want %d body=%s", createRec.Code, http.StatusOK, createRec.Body.String())
+	}
+	createData := decodeEnvelopeData(t, createRec.Body.String())
+	taskID, _ := createData["ID"].(string)
+	if taskID == "" {
+		t.Fatalf("POST /api/v1/projects/{id}/tasks missing ID: %s", createRec.Body.String())
+	}
+
+	listRec := httptest.NewRecorder()
+	h.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+string(project.ID)+"/tasks", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects/{id}/tasks status = %d, want %d body=%s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	listData := decodeEnvelopeData(t, listRec.Body.String())
+	items, ok := listData["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("GET /api/v1/projects/{id}/tasks items = %#v, want len=1", listData["items"])
+	}
+
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+string(project.ID)+"/tasks/"+taskID, nil))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/projects/{id}/tasks/{taskId} status = %d, want %d body=%s", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+
+	patchBody := []byte(`{"title":"p10-task-updated","description":"updated","priority":"urgent","clear_assignee":true,"clear_due_at":true}`)
+	patchRec := httptest.NewRecorder()
+	h.ServeHTTP(patchRec, httptest.NewRequest(http.MethodPatch, "/api/v1/projects/"+string(project.ID)+"/tasks/"+taskID, bytes.NewReader(patchBody)))
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/v1/projects/{id}/tasks/{taskId} status = %d, want %d body=%s", patchRec.Code, http.StatusOK, patchRec.Body.String())
+	}
+	patchData := decodeEnvelopeData(t, patchRec.Body.String())
+	if got, _ := patchData["Title"].(string); got != "p10-task-updated" {
+		t.Fatalf("patched title = %q, want p10-task-updated", got)
+	}
+	if patchData["AssigneeID"] != nil {
+		t.Fatalf("patched assignee = %#v, want nil", patchData["AssigneeID"])
+	}
+	if patchData["DueAt"] != nil {
+		t.Fatalf("patched due_at = %#v, want nil", patchData["DueAt"])
+	}
+
+	deleteRec := httptest.NewRecorder()
+	h.ServeHTTP(deleteRec, httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+string(project.ID)+"/tasks/"+taskID, nil))
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/v1/projects/{id}/tasks/{taskId} status = %d, want %d body=%s", deleteRec.Code, http.StatusOK, deleteRec.Body.String())
+	}
+	deleteData := decodeEnvelopeData(t, deleteRec.Body.String())
+	if deleted, _ := deleteData["deleted"].(bool); !deleted {
+		t.Fatalf("delete result = %#v, want deleted=true", deleteData["deleted"])
+	}
+
+	getAfterDeleteRec := httptest.NewRecorder()
+	h.ServeHTTP(getAfterDeleteRec, httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+string(project.ID)+"/tasks/"+taskID, nil))
+	if getAfterDeleteRec.Code != http.StatusNotFound {
+		t.Fatalf("GET deleted task status = %d, want %d body=%s", getAfterDeleteRec.Code, http.StatusNotFound, getAfterDeleteRec.Body.String())
+	}
+	if env := decodeEnvelope(t, getAfterDeleteRec.Body.String()); env.Code != "NOT_FOUND" {
+		t.Fatalf("GET deleted task code = %q, want NOT_FOUND", env.Code)
+	}
+}
+
+func TestProjectTaskRoutes_ProjectMismatchReturnsNotFound(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	repos := memory.NewRepositories()
+	svcs, err := service.NewServices(repos, service.RandomIDGenerator{}, time.Now)
+	if err != nil {
+		t.Fatalf("NewServices err = %v", err)
+	}
+	owner, err := svcs.Users.Create(context.Background(), service.CreateUserInput{
+		Username:    "owner-mismatch",
+		DisplayName: "Owner Mismatch",
+		Email:       "owner-mismatch@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create err = %v", err)
+	}
+	projectA, err := svcs.Projects.Create(context.Background(), service.CreateProjectInput{
+		OwnerID: owner.ID,
+		Name:    "project-a",
+	})
+	if err != nil {
+		t.Fatalf("Projects.Create(projectA) err = %v", err)
+	}
+	projectB, err := svcs.Projects.Create(context.Background(), service.CreateProjectInput{
+		OwnerID: owner.ID,
+		Name:    "project-b",
+	})
+	if err != nil {
+		t.Fatalf("Projects.Create(projectB) err = %v", err)
+	}
+	task, err := svcs.Tasks.Create(context.Background(), service.CreateTaskInput{
+		ProjectID: projectA.ID,
+		CreatorID: owner.ID,
+		Title:     "mismatch-task",
+	})
+	if err != nil {
+		t.Fatalf("Tasks.Create err = %v", err)
+	}
+
+	h := transporthttp.NewHandlerWithServices(logger, transporthttp.SystemInfo{}, svcs)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+string(projectB.ID)+"/tasks/"+string(task.ID), nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-project GET status = %d, want %d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if env := decodeEnvelope(t, rec.Body.String()); env.Code != "NOT_FOUND" {
+		t.Fatalf("cross-project GET code = %q, want NOT_FOUND", env.Code)
+	}
+}
+
+func TestProjectTaskRoutes_InvalidDueAtReturnsInvalidArgument(t *testing.T) {
+	logger, _ := loggerWithCapture()
+	repos := memory.NewRepositories()
+	svcs, err := service.NewServices(repos, service.RandomIDGenerator{}, time.Now)
+	if err != nil {
+		t.Fatalf("NewServices err = %v", err)
+	}
+	owner, err := svcs.Users.Create(context.Background(), service.CreateUserInput{
+		Username:    "owner-invalid-due",
+		DisplayName: "Owner Invalid Due",
+		Email:       "owner-invalid-due@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create err = %v", err)
+	}
+	project, err := svcs.Projects.Create(context.Background(), service.CreateProjectInput{
+		OwnerID: owner.ID,
+		Name:    "project-invalid-due",
+	})
+	if err != nil {
+		t.Fatalf("Projects.Create err = %v", err)
+	}
+
+	h := transporthttp.NewHandlerWithServices(logger, transporthttp.SystemInfo{}, svcs)
+
+	createBody := []byte(`{"creator_id":"` + string(owner.ID) + `","title":"invalid-due","due_at":"not-rfc3339"}`)
+	createRec := httptest.NewRecorder()
+	h.ServeHTTP(createRec, httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+string(project.ID)+"/tasks", bytes.NewReader(createBody)))
+	if createRec.Code != http.StatusBadRequest {
+		t.Fatalf("POST with invalid due_at status = %d, want %d body=%s", createRec.Code, http.StatusBadRequest, createRec.Body.String())
+	}
+	if env := decodeEnvelope(t, createRec.Body.String()); env.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("POST with invalid due_at code = %q, want INVALID_ARGUMENT", env.Code)
+	}
+}
+
 func TestRisk_RequestIDShouldBePresentInAccessLogs(t *testing.T) {
 	logger, cap := loggerWithCapture()
 	h := transporthttp.NewHandler(logger)
