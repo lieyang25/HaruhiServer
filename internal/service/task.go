@@ -88,6 +88,108 @@ func (s *taskService) ListByAssigneeID(ctx context.Context, assigneeID domain.Us
 	return s.deps.repos.Tasks.ListByAssigneeID(ctx, assigneeID)
 }
 
+func (s *taskService) Update(ctx context.Context, in UpdateTaskInput) (*domain.Task, error) {
+	if in.ClearAssignee && in.AssigneeID != nil {
+		return nil, domain.NewDomainError(domain.ErrInvalidArgument, "task.assignee_id cannot be set and cleared at the same time")
+	}
+	if in.ClearDueAt && in.DueAt != nil {
+		return nil, domain.NewDomainError(domain.ErrInvalidArgument, "task.due_at cannot be set and cleared at the same time")
+	}
+
+	task, err := s.deps.repos.Tasks.GetByID(ctx, in.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	previous := *task
+	previous.AssigneeID = cloneUserIDPtr(task.AssigneeID)
+	previous.DueAt = cloneTimePtr(task.DueAt)
+	previous.CompletedAt = cloneTimePtr(task.CompletedAt)
+
+	if in.AssigneeID != nil {
+		if _, err := s.deps.repos.Users.GetByID(ctx, *in.AssigneeID); err != nil {
+			return nil, err
+		}
+	}
+
+	now := s.deps.now()
+
+	if in.Title != nil {
+		task.Title = *in.Title
+	}
+	if in.Description != nil {
+		task.Description = *in.Description
+	}
+	if in.AssigneeID != nil {
+		task.AssigneeID = cloneUserIDPtr(in.AssigneeID)
+	}
+	if in.ClearAssignee {
+		task.AssigneeID = nil
+	}
+	if in.Priority != nil {
+		task.Priority = *in.Priority
+	}
+	if in.DueAt != nil {
+		task.DueAt = cloneTimePtr(in.DueAt)
+	}
+	if in.ClearDueAt {
+		task.DueAt = nil
+	}
+	task.UpdatedAt = now
+
+	if err := task.Validate(); err != nil {
+		return nil, err
+	}
+	if err := s.deps.repos.Tasks.Update(ctx, task); err != nil {
+		return nil, err
+	}
+
+	if err := recordAudit(
+		ctx,
+		s.deps.repos,
+		s.deps.idg,
+		now,
+		in.Meta,
+		domain.AuditResourceTask,
+		string(task.ID),
+		domain.AuditActionUpdate,
+		"update task",
+	); err != nil {
+		rollbackErr := s.deps.repos.Tasks.Update(ctx, &previous)
+		return nil, joinAuditAndRollbackError(err, "rollback task update", rollbackErr)
+	}
+
+	return task, nil
+}
+
+func (s *taskService) Delete(ctx context.Context, in TaskActionInput) error {
+	task, err := s.deps.repos.Tasks.GetByID(ctx, in.TaskID)
+	if err != nil {
+		return err
+	}
+
+	now := s.deps.now()
+	if err := s.deps.repos.Tasks.Delete(ctx, in.TaskID); err != nil {
+		return err
+	}
+
+	if err := recordAudit(
+		ctx,
+		s.deps.repos,
+		s.deps.idg,
+		now,
+		in.Meta,
+		domain.AuditResourceTask,
+		string(in.TaskID),
+		domain.AuditActionDelete,
+		"delete task",
+	); err != nil {
+		rollbackErr := s.deps.repos.Tasks.Create(ctx, task)
+		return joinAuditAndRollbackError(err, "rollback task delete", rollbackErr)
+	}
+
+	return nil
+}
+
 func (s *taskService) Start(ctx context.Context, in TaskActionInput) (*domain.Task, error) {
 	task, err := s.deps.repos.Tasks.GetByID(ctx, in.TaskID)
 	if err != nil {

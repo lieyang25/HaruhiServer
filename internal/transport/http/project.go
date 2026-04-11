@@ -37,6 +37,15 @@ func (h *Handler) projects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) projectByID(w http.ResponseWriter, r *http.Request) {
+	if projectID, ok := parseProjectTaskCollectionPath(r.URL.Path); ok {
+		h.projectTasks(w, r, projectID)
+		return
+	}
+	if projectID, taskID, ok := parseProjectTaskItemPath(r.URL.Path); ok {
+		h.projectTaskByID(w, r, projectID, taskID)
+		return
+	}
+
 	id, ok := parseProjectID(r.URL.Path)
 	if !ok {
 		response.Error(w, apperr.New(apperr.CodeNotFound, "project not found"))

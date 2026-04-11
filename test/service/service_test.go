@@ -315,6 +315,170 @@ func TestService_TaskLifecycleAndQueries(t *testing.T) {
 	}
 }
 
+func TestService_TaskUpdateAndDelete(t *testing.T) {
+	repos := newMemoryRepos()
+	now := time.Unix(1710000000, 0)
+	svcs, err := service.NewServices(repos, newSequenceIDGenerator("id"), fixedNow(now))
+	if err != nil {
+		t.Fatalf("NewServices err = %v", err)
+	}
+	ctx := context.Background()
+
+	creator, err := svcs.Users.Create(ctx, service.CreateUserInput{
+		Username:    "creator-u",
+		DisplayName: "Creator U",
+		Email:       "creator-u@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create(creator) err = %v", err)
+	}
+	assigneeA, err := svcs.Users.Create(ctx, service.CreateUserInput{
+		Username:    "assignee-a",
+		DisplayName: "Assignee A",
+		Email:       "assignee-a@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create(assigneeA) err = %v", err)
+	}
+	assigneeB, err := svcs.Users.Create(ctx, service.CreateUserInput{
+		Username:    "assignee-b",
+		DisplayName: "Assignee B",
+		Email:       "assignee-b@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create(assigneeB) err = %v", err)
+	}
+	project, err := svcs.Projects.Create(ctx, service.CreateProjectInput{
+		OwnerID: creator.ID,
+		Name:    "Task Update/Delete Project",
+	})
+	if err != nil {
+		t.Fatalf("Projects.Create err = %v", err)
+	}
+
+	initialDueAt := now.Add(24 * time.Hour)
+	task, err := svcs.Tasks.Create(ctx, service.CreateTaskInput{
+		ProjectID:  project.ID,
+		CreatorID:  creator.ID,
+		AssigneeID: &assigneeA.ID,
+		Title:      "Task Before Update",
+		Priority:   domain.TaskPriorityLow,
+		DueAt:      &initialDueAt,
+	})
+	if err != nil {
+		t.Fatalf("Tasks.Create err = %v", err)
+	}
+
+	newTitle := "Task After Update"
+	newDescription := "Updated description"
+	newPriority := domain.TaskPriorityUrgent
+	newDueAt := now.Add(72 * time.Hour)
+	updated, err := svcs.Tasks.Update(ctx, service.UpdateTaskInput{
+		TaskID:      task.ID,
+		Title:       &newTitle,
+		Description: &newDescription,
+		AssigneeID:  &assigneeB.ID,
+		Priority:    &newPriority,
+		DueAt:       &newDueAt,
+	})
+	if err != nil {
+		t.Fatalf("Tasks.Update(set fields) err = %v", err)
+	}
+	if updated.Title != newTitle {
+		t.Fatalf("updated.Title = %q, want %q", updated.Title, newTitle)
+	}
+	if updated.Description != newDescription {
+		t.Fatalf("updated.Description = %q, want %q", updated.Description, newDescription)
+	}
+	if updated.AssigneeID == nil || *updated.AssigneeID != assigneeB.ID {
+		t.Fatalf("updated.AssigneeID = %v, want %q", updated.AssigneeID, assigneeB.ID)
+	}
+	if updated.Priority != newPriority {
+		t.Fatalf("updated.Priority = %q, want %q", updated.Priority, newPriority)
+	}
+	if updated.DueAt == nil || !updated.DueAt.Equal(newDueAt) {
+		t.Fatalf("updated.DueAt = %v, want %v", updated.DueAt, newDueAt)
+	}
+
+	updated, err = svcs.Tasks.Update(ctx, service.UpdateTaskInput{
+		TaskID:        task.ID,
+		ClearAssignee: true,
+		ClearDueAt:    true,
+	})
+	if err != nil {
+		t.Fatalf("Tasks.Update(clear fields) err = %v", err)
+	}
+	if updated.AssigneeID != nil {
+		t.Fatalf("updated.AssigneeID = %v, want nil", updated.AssigneeID)
+	}
+	if updated.DueAt != nil {
+		t.Fatalf("updated.DueAt = %v, want nil", updated.DueAt)
+	}
+
+	if err := svcs.Tasks.Delete(ctx, service.TaskActionInput{TaskID: task.ID}); err != nil {
+		t.Fatalf("Tasks.Delete err = %v", err)
+	}
+	if _, err := svcs.Tasks.GetByID(ctx, task.ID); err == nil {
+		t.Fatal("Tasks.GetByID after delete err = nil")
+	}
+	if list, err := svcs.Tasks.ListByProjectID(ctx, project.ID); err != nil || len(list) != 0 {
+		t.Fatalf("Tasks.ListByProjectID after delete len=%d err=%v", len(list), err)
+	}
+}
+
+func TestService_TaskUpdateRejectsConflictingPatch(t *testing.T) {
+	repos := newMemoryRepos()
+	now := time.Unix(1710000000, 0)
+	svcs, err := service.NewServices(repos, newSequenceIDGenerator("id"), fixedNow(now))
+	if err != nil {
+		t.Fatalf("NewServices err = %v", err)
+	}
+	ctx := context.Background()
+
+	creator, err := svcs.Users.Create(ctx, service.CreateUserInput{
+		Username:    "creator-c",
+		DisplayName: "Creator C",
+		Email:       "creator-c@example.com",
+	})
+	if err != nil {
+		t.Fatalf("Users.Create err = %v", err)
+	}
+	project, err := svcs.Projects.Create(ctx, service.CreateProjectInput{
+		OwnerID: creator.ID,
+		Name:    "Task Conflict Project",
+	})
+	if err != nil {
+		t.Fatalf("Projects.Create err = %v", err)
+	}
+	task, err := svcs.Tasks.Create(ctx, service.CreateTaskInput{
+		ProjectID: project.ID,
+		CreatorID: creator.ID,
+		Title:     "Task Conflict",
+	})
+	if err != nil {
+		t.Fatalf("Tasks.Create err = %v", err)
+	}
+
+	dueAt := now.Add(6 * time.Hour)
+	_, err = svcs.Tasks.Update(ctx, service.UpdateTaskInput{
+		TaskID:        task.ID,
+		AssigneeID:    &creator.ID,
+		ClearAssignee: true,
+	})
+	if err == nil {
+		t.Fatal("Tasks.Update with assignee_id + clear_assignee err = nil")
+	}
+
+	_, err = svcs.Tasks.Update(ctx, service.UpdateTaskInput{
+		TaskID:     task.ID,
+		DueAt:      &dueAt,
+		ClearDueAt: true,
+	})
+	if err == nil {
+		t.Fatal("Tasks.Update with due_at + clear_due_at err = nil")
+	}
+}
+
 func TestService_NoteLifecycleAndQueries(t *testing.T) {
 	repos := newMemoryRepos()
 	now := time.Unix(1710000000, 0)
@@ -578,6 +742,82 @@ func TestRisk_WriteErrorShouldNotPersistProjectTaskNoteSessionWhenAuditFails(t *
 	}
 
 	_ = project
+}
+
+func TestRisk_WriteErrorShouldNotPersistTaskUpdateOrDeleteWhenAuditFails(t *testing.T) {
+	repos := newMemoryRepos()
+	repos.AuditLogs = &failingAuditLogRepository{createErr: errors.New("audit down")}
+	now := time.Unix(1710000000, 0)
+	ctx := context.Background()
+
+	owner := &domain.User{
+		ID:          domain.UserID("owner-risk-1"),
+		Username:    "owner-risk",
+		DisplayName: "Owner Risk",
+		Email:       "owner-risk@example.com",
+		Role:        domain.UserRoleMember,
+		Status:      domain.UserStatusActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := repos.Users.Create(ctx, owner); err != nil {
+		t.Fatalf("seed owner err = %v", err)
+	}
+	project := &domain.Project{
+		ID:         domain.ProjectID("project-risk-1"),
+		OwnerID:    owner.ID,
+		Name:       "Risk Project",
+		Visibility: domain.ProjectVisibilityPrivate,
+		Status:     domain.ProjectStatusActive,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := repos.Projects.Create(ctx, project); err != nil {
+		t.Fatalf("seed project err = %v", err)
+	}
+
+	taskID := domain.TaskID("task-risk-1")
+	originalTitle := "Task Before Failed Audit"
+	if err := repos.Tasks.Create(ctx, &domain.Task{
+		ID:        taskID,
+		ProjectID: project.ID,
+		CreatorID: owner.ID,
+		Title:     originalTitle,
+		Status:    domain.TaskStatusTodo,
+		Priority:  domain.TaskPriorityMedium,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed task err = %v", err)
+	}
+
+	svcs, err := service.NewServices(repos, newSequenceIDGenerator("id"), fixedNow(now.Add(2*time.Minute)))
+	if err != nil {
+		t.Fatalf("NewServices err = %v", err)
+	}
+
+	updatedTitle := "Task After Failed Audit"
+	if _, err := svcs.Tasks.Update(ctx, service.UpdateTaskInput{
+		TaskID: taskID,
+		Title:  &updatedTitle,
+	}); err == nil {
+		t.Fatal("Tasks.Update expected error when audit fails")
+	}
+
+	taskAfterUpdate, err := repos.Tasks.GetByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetByID(after failed update) err = %v", err)
+	}
+	if taskAfterUpdate.Title != originalTitle {
+		t.Fatalf("semantic risk: task title = %q, want %q after failed update", taskAfterUpdate.Title, originalTitle)
+	}
+
+	if err := svcs.Tasks.Delete(ctx, service.TaskActionInput{TaskID: taskID}); err == nil {
+		t.Fatal("Tasks.Delete expected error when audit fails")
+	}
+	if _, err := repos.Tasks.GetByID(ctx, taskID); err != nil {
+		t.Fatalf("semantic risk: task should still exist after failed delete, got err=%v", err)
+	}
 }
 
 func TestRisk_ConcurrentSessionRevokeAndTouchMustNotResurrect(t *testing.T) {
